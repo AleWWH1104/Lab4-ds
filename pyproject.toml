@@ -1,0 +1,16 @@
+[project]
+name = "lab4-ds"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "ipykernel>=7.3.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.2",
+    "openeo>=0.51.0",
+    "pandas>=2.3.3",
+    "rasterio>=1.5.1",
+    "sentinelhub>=3.11.5",
+]
