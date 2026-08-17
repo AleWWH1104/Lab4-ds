@@ -1,7 +1,7 @@
 [project]
 name = "lab4-ds"
 version = "0.1.0"
-description = "Add your description here"
+description = "Reproducible Sentinel-2 cyanobacteria analysis for Lakes Atitlan and Amatitlan"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -15,3 +15,30 @@ dependencies = [
     "rasterio>=1.5.1",
     "sentinelhub>=3.11.5",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "ruff>=0.12.0",
+]
+
+[project.scripts]
+lab4 = "lab4_ds.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lab4_ds"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = ["Lab4.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
