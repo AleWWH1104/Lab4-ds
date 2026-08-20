@@ -1,14 +1,1 @@
-.env
-.venv/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-.atl/
-.codegraph/
-*.pyc
-
-# Large satellite products stay local; final evidence is versioned.
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
+datos_ml/
