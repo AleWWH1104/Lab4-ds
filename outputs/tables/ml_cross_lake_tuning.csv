@@ -1,0 +1,7 @@
+model,best_inner_f2,best_params,train_lake,evaluation_lake,train_n,evaluation_n,evaluation_tuning_overlap,maximum_inner_group_overlap
+Logistic regression,0.8373569955858565,{'classifier__C': 0.3},atitlan,amatitlan,8440,10128,0,0
+Random forest,0.8546480166114091,"{'classifier__max_depth': None, 'classifier__min_samples_leaf': 10}",atitlan,amatitlan,8440,10128,0,0
+Gradient boosting,0.8501269453320077,{'classifier__learning_rate': 0.1},atitlan,amatitlan,8440,10128,0,0
+Logistic regression,0.8203900511893779,{'classifier__C': 3.0},amatitlan,atitlan,10128,8440,0,0
+Random forest,0.8710547258699827,"{'classifier__max_depth': None, 'classifier__min_samples_leaf': 10}",amatitlan,atitlan,10128,8440,0,0
+Gradient boosting,0.846487629279479,{'classifier__learning_rate': 0.1},amatitlan,atitlan,10128,8440,0,0

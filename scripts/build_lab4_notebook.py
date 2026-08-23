@@ -22,7 +22,7 @@ cells = [
 **CC3084 – Data Science**  
 **Integrantes:** Iris Ayala, Anggie Quezada y Jonathan Diaz
 
-Esta entrega parcial reproduce, sin red ni credenciales, los ejercicios 1–6 y la validación temporal a partir de los 22 GeoTIFF locales de Sentinel-2. Los ejercicios 7–10 quedan identificados al final como trabajo **no implementado**.
+Esta entrega parcial reproduce, sin red ni credenciales, los ejercicios 1–7 y la validación temporal a partir de los 22 GeoTIFF locales de Sentinel-2. Únicamente los ejercicios 8–10 quedan identificados al final como trabajo **no implementado**.
 
 > **Alcance científico.** La respuesta representa una categoría construida a partir de un **proxy satelital** de clorofila-a y la detección espectral FAI; no es una medición sanitaria, una identificación taxonómica de cianobacterias ni una medición de toxinas. Los resultados sirven para priorizar observación y muestreo de campo, no para emitir alertas de salud pública.
 """
@@ -39,12 +39,12 @@ Los ejercicios 1–3 son correcciones completas y no se contabilizan como trabaj
 | Ejercicio 5: métricas, matrices e interpretación | Implementado | 12 % |
 | Ejercicio 6: bloques UTM, mapa y GroupKFold | Implementado | 18 % |
 | Validación temporal cronológica y comparación | Implementado | 10 % |
-| Ejercicio 7: transferencia entre lagos | TODO | 15 % |
+| Ejercicio 7: transferencia entre lagos | Implementado | 15 % |
 | Ejercicio 8: importancia y SHAP | TODO | 12 % |
 | Ejercicio 9: mapas predictivos y errores | TODO | 13 % |
 | Ejercicio 10: conclusiones integrales | TODO | 10 % |
-| **Total implementado nuevo** |  | **50 %** |
-| **Total pendiente** |  | **50 %** |
+| **Total implementado nuevo** |  | **65 %** |
+| **Total pendiente (ejercicios 8–10)** |  | **35 %** |
 """
     ),
     markdown(
@@ -79,6 +79,7 @@ from lab4_ds.ml import (
     add_spatial_blocks,
     build_ml_dataset,
     chronological_split_indices,
+    evaluate_cross_lake,
     evaluate_models,
     evaluate_spatial_cv,
     evaluate_temporal_holdout,
@@ -373,7 +374,113 @@ display_figure(fig)
 
 La división aleatoria mezcla píxeles vecinos y fechas de una misma escena entre train y test, de modo que puede beneficiarse de autocorrelación y producir una estimación optimista. GroupKFold pregunta si el modelo se desplaza a bloques no vistos, mientras que el corte temporal pregunta si se mantiene en adquisiciones futuras. Las diferencias de recall mostradas arriba cuantifican esa pérdida o ganancia para cada modelo. Con solo 22 escenas, estas métricas tienen incertidumbre y no sustituyen una campaña externa.
 
-El resultado más realista depende del uso: para visitar una nueva zona del mismo sistema, validación espacial; para pronosticar una campaña posterior, validación temporal. Ninguna valida transferencia entre lagos, porque ese experimento pertenece al ejercicio 7 pendiente.
+El resultado más realista depende del uso: para visitar una nueva zona del mismo sistema, validación espacial; para pronosticar una campaña posterior, validación temporal. La transferencia entre lagos se evalúa separadamente a continuación.
+"""
+    ),
+    markdown(
+        """
+## Ejercicio 7 — Generalización entre lagos
+
+Se ejecutan los dos sentidos exigidos con los tres modelos. En cada experimento, el lago externo queda completamente aislado: preprocesamiento, pesos, selección F2 e hiperparámetros se ajustan únicamente con el lago de entrenamiento. El CV interno usa tres folds `GroupKFold` sobre bloques de 1 km del lago de entrenamiento; luego el modelo seleccionado se reajusta con todo ese lago y se evalúa una sola vez sobre el otro.
+"""
+    ),
+    code(
+        """
+cross_lake_metrics, cross_lake_tuning = evaluate_cross_lake(
+    spatial_data,
+    inner_splits=3,
+    random_state=RANDOM_STATE,
+)
+cross_lake_metrics.to_csv(EVIDENCE_DIR / "ml_cross_lake_metrics.csv", index=False)
+cross_lake_tuning.to_csv(EVIDENCE_DIR / "ml_cross_lake_tuning.csv", index=False)
+
+assert cross_lake_tuning["evaluation_tuning_overlap"].eq(0).all()
+assert cross_lake_tuning["maximum_inner_group_overlap"].eq(0).all()
+display(cross_lake_metrics)
+display(cross_lake_tuning)
+
+baseline = random_metrics[["model", "accuracy", "precision", "recall", "f1", "roc_auc"]].rename(
+    columns={metric: f"mixed_random_{metric}" for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]}
+)
+cross_lake_comparison = cross_lake_metrics.merge(baseline, on="model", how="left")
+for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
+    cross_lake_comparison[f"delta_{metric}"] = cross_lake_comparison[metric] - cross_lake_comparison[f"mixed_random_{metric}"]
+cross_lake_comparison.to_csv(EVIDENCE_DIR / "ml_cross_lake_comparison.csv", index=False)
+display(cross_lake_comparison)
+"""
+    ),
+    code(
+        """
+population_context = population.groupby("lake", as_index=False).agg(
+    scenes=("date", "nunique"),
+    first_date=("date", "min"),
+    last_date=("date", "max"),
+    eligible_population=("eligible_pixels", "sum"),
+    population_positive=("class_1", "sum"),
+)
+population_context["population_positive_percent"] = 100 * population_context["population_positive"] / population_context["eligible_population"]
+
+sample_context = data.groupby("lake", as_index=False).agg(
+    sample_n=("target", "size"),
+    sample_positive_percent=("target", lambda values: 100 * values.mean()),
+)
+spectral_context = data.groupby("lake")[list(PREDICTORS)].agg(["mean", "median", "std"])
+spectral_context.columns = [f"{band}_{statistic}" for band, statistic in spectral_context.columns]
+spectral_context = spectral_context.reset_index()
+cross_lake_context = population_context.merge(sample_context, on="lake").merge(spectral_context, on="lake")
+cross_lake_context.to_csv(EVIDENCE_DIR / "ml_cross_lake_distributions.csv", index=False)
+display(cross_lake_context)
+
+for experiment, results in cross_lake_metrics.groupby("experiment"):
+    best = results.sort_values(["recall", "f1"], ascending=False).iloc[0]
+    baseline_recall = random_metrics.set_index("model").loc[best["model"], "recall"]
+    print(
+        f"{experiment}: mayor recall = {best['model']} {best['recall']:.3f}; "
+        f"F1={best['f1']:.3f}; ROC-AUC={best['roc_auc']:.3f}; "
+        f"Δ recall frente a mixed random={best['recall'] - baseline_recall:+.3f}."
+    )
+
+atitlan_to_amatitlan = cross_lake_metrics.query("experiment == 'atitlan_to_amatitlan'").sort_values(["recall", "f1"], ascending=False).iloc[0]
+amatitlan_to_atitlan = cross_lake_metrics.query("experiment == 'amatitlan_to_atitlan'").sort_values(["recall", "f1"], ascending=False).iloc[0]
+first_specificity = atitlan_to_amatitlan["tn"] / (atitlan_to_amatitlan["tn"] + atitlan_to_amatitlan["fp"])
+print(
+    "Conclusión explícita: NO se observa generalización adecuada y equilibrada entre lagos. "
+    f"Atitlán→Amatitlán alcanza recall={atitlan_to_amatitlan['recall']:.3f}, pero "
+    f"precision={atitlan_to_amatitlan['precision']:.3f}, especificidad={first_specificity:.3f} "
+    f"y FP={int(atitlan_to_amatitlan['fp'])}. "
+    f"Amatitlán→Atitlán alcanza como máximo recall={amatitlan_to_atitlan['recall']:.3f} "
+    f"y omite FN={int(amatitlan_to_atitlan['fn'])} positivos del test estratificado."
+)
+"""
+    ),
+    code(
+        """
+cross_plot = cross_lake_metrics[["experiment", "model", "recall", "f1"]].copy()
+mixed_plot = random_metrics[["model", "recall", "f1"]].assign(experiment="mixed_random_70_30")
+cross_plot = pd.concat([cross_plot, mixed_plot], ignore_index=True)
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 4.5), sharey=True)
+for metric, axis in zip(["recall", "f1"], axes, strict=True):
+    sns.barplot(data=cross_plot, x="model", y=metric, hue="experiment", ax=axis)
+    axis.set_ylim(0, 1)
+    axis.set_title(f"{metric.upper()}: transferencia frente a mezcla")
+    axis.tick_params(axis="x", rotation=15)
+axes[0].legend(title="Experimento", fontsize=8)
+axes[1].get_legend().remove()
+plt.suptitle("Generalización entre lagos con test externo intacto")
+plt.tight_layout()
+display_figure(fig)
+"""
+    ),
+    markdown(
+        """
+### Respuestas 7.4–7.6 e interpretación
+
+La comparación anterior usa como referencia el test aleatorio común con ambos lagos. Esa referencia mezcla espacio, fechas e identidades de lago y, además, tanto ella como los tests externos provienen de la muestra estratificada por lago–fecha–clase. Por ello sus precision, accuracy y matrices son condicionales al diseño de muestreo: no estiman directamente valores predictivos bajo la prevalencia poblacional.
+
+**Respuesta explícita:** los resultados no respaldan una generalización adecuada y equilibrada en ninguno de los dos sentidos. Atitlán→Amatitlán favorece casi indiscriminadamente la clase positiva y Amatitlán→Atitlán conserva precision alta a costa de omitir la mayoría de positivos. Una caída frente a `mixed_random_70_30` indica cambio de dominio: el patrón aprendido en un lago no conserva el mismo desempeño en el otro. Incluso si una métrica aislada mejora, dos lagos y 22 fechas no prueban generalización a otros cuerpos de agua ni a campañas futuras.
+
+Las diferencias observables están en la tabla de contexto: prevalencia poblacional del proxy, intervalos de fechas, cobertura elegible y medias/medianas/dispersión de B02, B03, B08, B11 y B12. Esas diferencias espectrales pueden reflejar combinaciones de material suspendido, color del agua, geometría de adquisición, atmósfera residual o condiciones limnológicas. Diferencias geográficas como morfometría, altitud y presión de cuenca son hipótesis plausibles, pero no están medidas por este dataset y **no se interpretan causalmente**. Para atribución ambiental harían falta muestreos in situ, variables meteorológicas/hidrológicas y validación multisitio representativa.
 """
     ),
     markdown(
@@ -382,12 +489,11 @@ El resultado más realista depende del uso: para visitar una nueva zona del mism
 
 Los siguientes ejercicios **no están implementados** en esta entrega parcial:
 
-- **Ejercicio 7 (7.1–7.6), generalización entre lagos:** falta entrenar Atitlán→Amatitlán y Amatitlán→Atitlán, calcular métricas, comparar contra datos mezclados e interpretar diferencias ambientales/espectrales.
 - **Ejercicio 8 (8.1–8.4), interpretación:** falta seleccionar el mejor modelo con el conjunto completo de experimentos, producir importancia global y SHAP Summary Plot, e interpretar dirección y contexto ambiental. SHAP no se agregó como dependencia.
 - **Ejercicio 9 (9.1–9.7), mapas predictivos:** falta inferir probabilidades sobre las grillas válidas completas, reconstruir y exportar mapas para ambos lagos, comparar con Parte 1 y mapear falsos positivos/negativos y regiones difíciles.
 - **Ejercicio 10 (10.1–10.3), análisis y conclusiones finales:** falta integrar los experimentos 7–9, decidir con evidencia si el sistema puede apoyar monitoreo, consolidar limitaciones y proponer datos adicionales.
 
-No se presenta una conclusión final del laboratorio porque hacerlo antes de completar transferencia, explicabilidad y mapas sería científicamente engañoso.
+No se presenta una conclusión final del laboratorio porque hacerlo antes de completar explicabilidad y mapas sería científicamente engañoso. Con el ejercicio 7 terminado, queda aproximadamente 35 % del esfuerzo nuevo estimado, correspondiente exclusivamente a los ejercicios 8–10.
 """
     ),
 ]

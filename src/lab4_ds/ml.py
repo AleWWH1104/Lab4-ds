@@ -73,6 +73,17 @@ class NestedSpatialFold:
     inner_splits: tuple[tuple[np.ndarray, np.ndarray], ...]
 
 
+@dataclass(frozen=True)
+class CrossLakePlan:
+    """Observable train, external-test, and internal-tuning indices for lake transfer."""
+
+    train_lake: str
+    evaluation_lake: str
+    train_indices: np.ndarray
+    evaluation_indices: np.ndarray
+    tuning_splits: tuple[tuple[np.ndarray, np.ndarray], ...]
+
+
 def _scene_pairs(raw_root: Path, processed_root: Path) -> list[tuple[str, str, Path, Path]]:
     pairs: list[tuple[str, str, Path, Path]] = []
     for raw_path in sorted(raw_root.glob("*/*.tif")):
@@ -427,6 +438,40 @@ def temporal_tuning_splits(
     return splits
 
 
+def cross_lake_plan(
+    data: pd.DataFrame,
+    train_lake: str,
+    evaluation_lake: str,
+    n_splits: int = 3,
+) -> CrossLakePlan:
+    """Plan group-aware tuning within one lake and untouched evaluation on the other."""
+    if train_lake == evaluation_lake:
+        raise ValueError("Training and evaluation lakes must differ")
+    train_indices = np.flatnonzero(data["lake"].to_numpy() == train_lake)
+    evaluation_indices = np.flatnonzero(data["lake"].to_numpy() == evaluation_lake)
+    if not train_indices.size or not evaluation_indices.size:
+        raise ValueError("Both training and evaluation lakes must contain observations")
+    train_data = data.iloc[train_indices]
+    group_count = train_data["spatial_block"].nunique()
+    if group_count < 2:
+        raise ValueError("Cross-lake tuning requires at least two training-lake spatial blocks")
+    splitter = GroupKFold(n_splits=min(n_splits, group_count))
+    tuning_splits: list[tuple[np.ndarray, np.ndarray]] = []
+    for inner_train_local, inner_validation_local in splitter.split(
+        train_data, train_data["target"], train_data["spatial_block"]
+    ):
+        tuning_splits.append(
+            (train_indices[inner_train_local], train_indices[inner_validation_local])
+        )
+    return CrossLakePlan(
+        train_lake=train_lake,
+        evaluation_lake=evaluation_lake,
+        train_indices=train_indices,
+        evaluation_indices=evaluation_indices,
+        tuning_splits=tuple(tuning_splits),
+    )
+
+
 def _tune_with_global_splits(
     data: pd.DataFrame,
     train_indices: np.ndarray,
@@ -582,3 +627,70 @@ def evaluate_temporal_holdout(
             }
         )
     return pd.DataFrame(rows), tuning
+
+
+def evaluate_cross_lake(
+    data: pd.DataFrame,
+    lake_pairs: tuple[tuple[str, str], ...] = (
+        ("atitlan", "amatitlan"),
+        ("amatitlan", "atitlan"),
+    ),
+    predictors: tuple[str, ...] = PREDICTORS,
+    inner_splits: int = 3,
+    random_state: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Tune exclusively within each training lake and evaluate once on the other lake."""
+    x = data.loc[:, predictors]
+    y = data["target"].astype(int)
+    metric_rows: list[dict[str, Any]] = []
+    tuning_rows: list[pd.DataFrame] = []
+    for pair_number, (train_lake, evaluation_lake) in enumerate(lake_pairs):
+        plan = cross_lake_plan(
+            data,
+            train_lake=train_lake,
+            evaluation_lake=evaluation_lake,
+            n_splits=inner_splits,
+        )
+        if y.iloc[plan.train_indices].nunique() < 2:
+            raise ValueError(f"Training lake {train_lake} contains only one target class")
+        models, tuning = _tune_with_global_splits(
+            data,
+            plan.train_indices,
+            plan.tuning_splits,
+            predictors,
+            random_state + pair_number,
+        )
+        tuning["train_lake"] = train_lake
+        tuning["evaluation_lake"] = evaluation_lake
+        tuning["train_n"] = len(plan.train_indices)
+        tuning["evaluation_n"] = len(plan.evaluation_indices)
+        tuning["evaluation_tuning_overlap"] = len(
+            set(plan.evaluation_indices).intersection(
+                index for split in plan.tuning_splits for indices in split for index in indices
+            )
+        )
+        tuning["maximum_inner_group_overlap"] = max(
+            len(
+                set(data.iloc[inner_train]["spatial_block"]).intersection(
+                    data.iloc[inner_validation]["spatial_block"]
+                )
+            )
+            for inner_train, inner_validation in plan.tuning_splits
+        )
+        tuning_rows.append(tuning)
+        for name, model in models.items():
+            probability = model.predict_proba(x.iloc[plan.evaluation_indices])[:, 1]
+            metric_rows.append(
+                {
+                    "strategy": "cross_lake",
+                    "experiment": f"{train_lake}_to_{evaluation_lake}",
+                    "train_lake": train_lake,
+                    "evaluation_lake": evaluation_lake,
+                    "model": name,
+                    "n_train": len(plan.train_indices),
+                    "n_test": len(plan.evaluation_indices),
+                    "test_classes": y.iloc[plan.evaluation_indices].nunique(),
+                    **binary_metrics(y.iloc[plan.evaluation_indices], probability),
+                }
+            )
+    return pd.DataFrame(metric_rows), pd.concat(tuning_rows, ignore_index=True)

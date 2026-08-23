@@ -11,6 +11,7 @@ from lab4_ds.ml import (
     binary_metrics,
     build_ml_dataset,
     chronological_split_indices,
+    cross_lake_plan,
     spatial_group_splits,
     spatial_nested_splits,
     temporal_tuning_splits,
@@ -168,3 +169,42 @@ def test_metrics_do_not_invent_auc_for_single_class() -> None:
     metrics = binary_metrics(np.array([1, 1]), np.array([0.8, 0.9]))
     assert np.isnan(metrics["roc_auc"])
     assert metrics["recall"] == 1
+
+
+def test_cross_lake_plan_isolates_external_lake_from_training_and_tuning() -> None:
+    data = pd.DataFrame(
+        {
+            "lake": ["atitlan"] * 8 + ["amatitlan"] * 6,
+            "spatial_block": np.repeat(["a", "b", "c", "d", "e", "f", "g"], 2),
+            "target": [0, 1] * 7,
+        }
+    )
+    plan = cross_lake_plan(data, "atitlan", "amatitlan", n_splits=2)
+    assert set(data.iloc[plan.train_indices]["lake"]) == {"atitlan"}
+    assert set(data.iloc[plan.evaluation_indices]["lake"]) == {"amatitlan"}
+    assert set(plan.train_indices).isdisjoint(plan.evaluation_indices)
+    for inner_train, inner_validation in plan.tuning_splits:
+        assert set(data.iloc[inner_train]["lake"]) == {"atitlan"}
+        assert set(data.iloc[inner_validation]["lake"]) == {"atitlan"}
+        assert set(inner_train).isdisjoint(plan.evaluation_indices)
+        assert set(inner_validation).isdisjoint(plan.evaluation_indices)
+        train_groups = set(data.iloc[inner_train]["spatial_block"])
+        validation_groups = set(data.iloc[inner_validation]["spatial_block"])
+        assert train_groups.isdisjoint(validation_groups)
+
+
+def test_cross_lake_plan_supports_both_transfer_directions() -> None:
+    data = pd.DataFrame(
+        {
+            "lake": ["atitlan"] * 6 + ["amatitlan"] * 6,
+            "spatial_block": np.repeat(["a", "b", "c", "d", "e", "f"], 2),
+            "target": [0, 1] * 6,
+        }
+    )
+    for train_lake, evaluation_lake in (
+        ("atitlan", "amatitlan"),
+        ("amatitlan", "atitlan"),
+    ):
+        plan = cross_lake_plan(data, train_lake, evaluation_lake, n_splits=2)
+        assert set(data.iloc[plan.train_indices]["lake"]) == {train_lake}
+        assert set(data.iloc[plan.evaluation_indices]["lake"]) == {evaluation_lake}
