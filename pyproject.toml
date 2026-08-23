@@ -19,6 +19,7 @@ dependencies = [
     "scikit-learn>=1.9.0",
     "seaborn>=0.13.2",
     "sentinelhub>=3.11.5",
+    "shap>=0.46.0",
 ]
 
 [dependency-groups]
@@ -36,6 +37,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lab4_ds"]
+
+[tool.uv]
+# shap pins numba<0.63 / llvmlite<0.46 on Intel macOS. Resolving for that
+# platform drags the whole lock down to llvmlite 0.36, which has no wheels
+# and cannot build on Python 3.14. We don't target Intel macOS, so skip it.
+environments = [
+    "sys_platform != 'darwin' or platform_machine != 'x86_64'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
