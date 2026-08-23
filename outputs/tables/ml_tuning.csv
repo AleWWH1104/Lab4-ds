@@ -1,0 +1,4 @@
+model,best_cv_f2,best_params
+Logistic regression,0.7143250724887564,{'classifier__C': 3.0}
+Random forest,0.861893760782389,"{'classifier__max_depth': None, 'classifier__min_samples_leaf': 10}"
+Gradient boosting,0.8324922469808765,{'classifier__learning_rate': 0.1}

@@ -1,0 +1,4 @@
+model,best_inner_f2,best_params,past_train_n,future_test_n,future_test_tuning_overlap,latest_tuning_date,earliest_future_test_date
+Logistic regression,0.574018118516562,{'classifier__C': 3.0},12115,6453,0,2026-02-12,2026-03-24
+Random forest,0.7166747277957451,"{'classifier__max_depth': 8, 'classifier__min_samples_leaf': 2}",12115,6453,0,2026-02-12,2026-03-24
+Gradient boosting,0.7208037034026568,{'classifier__learning_rate': 0.05},12115,6453,0,2026-02-12,2026-03-24
